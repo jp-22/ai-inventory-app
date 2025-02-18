@@ -3,7 +3,7 @@ import Webcam from "react-webcam";
 import { Button } from "./ui/button";
 import { Camera, X, Check } from "lucide-react";
 import { Input } from "./ui/input";
-import { countObjectsInImage } from "@/lib/gemini"; // Import the API call
+import { countObjectsInImage } from "@/lib/gemini";
 
 interface CameraViewProps {
   onCapture: (imageData: string, boundingBoxes: any[]) => void;
@@ -19,19 +19,17 @@ const CameraView = ({ onCapture, onClose, objectType }: CameraViewProps) => {
   const [manualCount, setManualCount] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const imageRef = useRef<HTMLImageElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const captureImage = useCallback(async () => {
     if (webcamRef.current) {
       const imageSrc = webcamRef.current.getScreenshot();
       if (imageSrc) {
         setCapturedImage(imageSrc);
-
-        // Call the API immediately after image capture
         setIsProcessing(true);
         try {
-          const base64Image = imageSrc.split(",")[1]; // Extract base64 data from the image src
+          const base64Image = imageSrc.split(",")[1];
           const data = await countObjectsInImage(base64Image, objectType);
-          console.log(data, "datatatatatattatt");
           if (data.count !== undefined) {
             setDetectedCount(data.count);
             setBoundingBoxes(data.boundingBoxes);
@@ -49,30 +47,35 @@ const CameraView = ({ onCapture, onClose, objectType }: CameraViewProps) => {
 
   const confirmCapture = () => {
     if (capturedImage) {
-      const finalCount = manualCount ? parseInt(manualCount) : detectedCount;
-
-      // Send image data and bounding box to parent
       onCapture(capturedImage.split(",")[1], boundingBoxes);
-
-      // Close the camera
       onClose();
     }
   };
 
-  // Utility function to directly position bounding boxes relative to the image
   const getBoundingBoxStyle = (box: any) => {
-    // Since bounding box coordinates are now relative to the image,
-    // you can directly apply them as a percentage of the image's width and height.
-    const style = {
-      top: `${box.y1}px`, // Using percentage-based positioning
-      left: `${box.x1}px`,
-      width: `${box.x2 - box.x1}px`, // Using the width as percentage of the image
-      height: `${box.y2 - box.y1}px`, // Using the height as percentage of the image
-      border: "2px solid red",
-      position: "absolute",
-    };
+    if (!imageRef.current) return {};
 
-    return style;
+    const img = imageRef.current;
+    const displayWidth = img.clientWidth;
+    const displayHeight = img.clientHeight;
+
+    // The coordinates are now normalized (0-1), so we just multiply by display dimensions
+    const scaledLeft = Math.round(box.x1 * displayWidth);
+    const scaledTop = Math.round(box.y1 * displayHeight);
+    const scaledWidth = Math.round((box.x2 - box.x1) * displayWidth);
+    const scaledHeight = Math.round((box.y2 - box.y1) * displayHeight);
+
+    return {
+      position: "absolute" as const,
+      left: `${scaledLeft}px`,
+      top: `${scaledTop}px`,
+      width: `${scaledWidth}px`,
+      height: `${scaledHeight}px`,
+      border: "2px solid #ef4444",
+      backgroundColor: "rgba(239, 68, 68, 0.1)",
+      pointerEvents: "none",
+      zIndex: 10,
+    };
   };
 
   return (
@@ -88,17 +91,23 @@ const CameraView = ({ onCapture, onClose, objectType }: CameraViewProps) => {
         </Button>
 
         <div className="relative flex-1">
-          <div className="relative aspect-video rounded-lg overflow-hidden bg-black">
+          <div
+            ref={containerRef}
+            className="relative h-[60vh] rounded-lg overflow-hidden bg-black"
+          >
             {!capturedImage ? (
               <>
                 <Webcam
                   audio={false}
                   ref={webcamRef}
                   screenshotFormat="image/jpeg"
-                  className="w-full h-full object-cover"
-                  videoConstraints={{ facingMode: "environment" }}
+                  className="w-full h-full object-contain"
+                  videoConstraints={{
+                    facingMode: "environment",
+                    width: 960,
+                    height: 960,
+                  }}
                 />
-                <div className="absolute inset-0 border-2 border-dashed border-white opacity-50" />
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="border-2 border-green-400 rounded-lg w-1/2 h-1/2 opacity-50">
                     <div className="absolute -top-6 left-1/2 transform -translate-x-1/2 bg-green-400 text-white px-2 py-1 rounded text-sm">
@@ -108,75 +117,89 @@ const CameraView = ({ onCapture, onClose, objectType }: CameraViewProps) => {
                 </div>
               </>
             ) : (
-              <div className="relative">
-                <img
-                  ref={imageRef}
-                  src={capturedImage}
-                  className="w-full h-full object-cover"
-                />
-                {/* Overlay bounding boxes on the image */}
-                {boundingBoxes.map((box, index) => (
-                  <div
-                    key={index}
-                    className="absolute"
-                    style={getBoundingBoxStyle(box)}
+              <div className="relative h-full flex items-center justify-center bg-black">
+                <div
+                  className="relative"
+                  style={{ width: "fit-content", height: "fit-content" }}
+                >
+                  <img
+                    ref={imageRef}
+                    src={capturedImage}
+                    className="max-h-[60vh] w-auto"
+                    alt="Captured"
+                    onLoad={(e) => {
+                      const img = e.target as HTMLImageElement;
+                      console.log("Image loaded dimensions:", {
+                        naturalWidth: img.naturalWidth,
+                        naturalHeight: img.naturalHeight,
+                        displayWidth: img.width,
+                        displayHeight: img.height,
+                        clientWidth: img.clientWidth,
+                        clientHeight: img.clientHeight,
+                        boundingBoxes,
+                      });
+                      setBoundingBoxes([...boundingBoxes]);
+                    }}
                   />
-                ))}
+                  {boundingBoxes.map((box, index) => (
+                    <div
+                      key={index}
+                      style={getBoundingBoxStyle(box)}
+                      className="absolute border-2 border-red-500 bg-red-500/10"
+                    />
+                  ))}
+                </div>
               </div>
             )}
           </div>
+
+          {/* Count overlay */}
+          {capturedImage && (
+            <div className="absolute top-4 left-4 right-4 flex items-center justify-between p-4 bg-white/90 backdrop-blur-sm rounded-lg shadow-lg z-10">
+              <div className="space-y-1">
+                <p className="text-sm text-gray-500">AI Detected Count</p>
+                <p className="text-2xl font-bold">{detectedCount}</p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm text-gray-500">Manual Count</p>
+                <Input
+                  type="number"
+                  value={manualCount}
+                  onChange={(e) => setManualCount(e.target.value)}
+                  className="w-24"
+                  min="0"
+                  placeholder={detectedCount.toString()}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Additional fields */}
-        <div className="space-y-4">
+        <div className="flex justify-center gap-2">
           {!capturedImage ? (
-            <div className="flex justify-center">
-              <Button
-                onClick={captureImage}
-                className="bg-white text-black hover:bg-gray-100"
-                disabled={isProcessing}
-              >
-                {isProcessing ? (
-                  "Processing..."
-                ) : (
-                  <>
-                    <Camera className="h-4 w-4 mr-2" /> Capture {objectType}
-                  </>
-                )}
-              </Button>
-            </div>
+            <Button
+              onClick={captureImage}
+              className="bg-white text-black hover:bg-gray-100"
+              disabled={isProcessing}
+            >
+              {isProcessing ? (
+                "Processing..."
+              ) : (
+                <>
+                  <Camera className="h-4 w-4 mr-2" /> Capture {objectType}
+                </>
+              )}
+            </Button>
           ) : (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-500">AI Detected Count</p>
-                  <p className="text-2xl font-bold">{detectedCount}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-500">Manual Count</p>
-                  <Input
-                    type="number"
-                    value={manualCount}
-                    onChange={(e) => setManualCount(e.target.value)}
-                    className="w-24"
-                    min="0"
-                    placeholder={detectedCount.toString()}
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setCapturedImage(null)}
-                >
-                  Retake
-                </Button>
-                <Button onClick={confirmCapture}>
-                  <Check className="h-4 w-4 mr-2" />
-                  Confirm Count
-                </Button>
-              </div>
-            </div>
+            <>
+              <Button variant="outline" onClick={() => setCapturedImage(null)}>
+                Retake
+              </Button>
+              <Button onClick={confirmCapture}>
+                <Check className="h-4 w-4 mr-2" />
+                Confirm Count
+              </Button>
+            </>
           )}
         </div>
       </div>

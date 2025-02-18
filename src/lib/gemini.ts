@@ -14,25 +14,23 @@ export async function countObjectsInImage(
 
     const prompt = `
     Task: Count objects in inventory image.
-    Context: Looking for person(s).
+    Context: Looking for ${objectType}.
     Rules:
     1. If image shows a different item, respond 'WRONG_ITEM: [item name]'.
-    2. If image shows the correct item, respond with the number of objects found, 
-       followed by their positions (top-left corner) and dimensions (width, height) in pixels, 
-       based on the provided image dimensions.
-    3. The AI should also return the dimensions of the image (width, height) in pixels.
+    2. If image shows the correct item, respond with the number of objects found.
+    3. For each object, provide normalized coordinates (0-1 range) for bounding boxes.
     Format:
     - The response should contain:
-      1. Image dimensions: width and height (in px).
-      2. Number of items found.
-      3. A list of objects, each with the following attributes:
-         - top: Top position (in px)
-         - left: Left position (in px)
-         - width: Width of the object (in px)
-         - height: Height of the object (in px)
+      1. Number of items found.
+      2. A list of objects, each with normalized coordinates (0-1 range):
+         - x1: Left position (0-1)
+         - y1: Top position (0-1)
+         - x2: Right position (0-1)
+         - y2: Bottom position (0-1)
     Example response:
       - For wrong item: 'WRONG_ITEM: keyboard'
-      - For correct item: 'Image dimensions: width: 1920px, height: 1080px. 3, [[top: 10, left: 20, width: 30, height: 40], [top: 50, left: 60, width: 20, height: 30], ...]'
+      - For correct item: '1, [[x1: 0.2, y1: 0.3, x2: 0.8, y2: 0.7]]'
+    Note: All coordinates should be normalized to 0-1 range regardless of image dimensions.
     `;
 
     const result = await model.generateContent([
@@ -48,7 +46,8 @@ export async function countObjectsInImage(
     const response = await result.response;
     const text = response.text();
 
-    console.log(text, "pppppppppppppppppppppp");
+    console.log("Raw AI Response:", text);
+
     // Check if response indicates wrong item
     if (text.includes("WRONG_ITEM:")) {
       const wrongItem = text.split("WRONG_ITEM:")[1].trim();
@@ -57,38 +56,44 @@ export async function countObjectsInImage(
       };
     }
 
-    // Extract image dimensions, number of objects, and object details
-    const regex =
-      /Image dimensions: width: (\d+)px, height: (\d+)px\. (\d+),\s?\[\[(.*?)\]\]/;
-    const match = text.match(regex);
-    if (match) {
-      const imageWidth = parseInt(match[1]); // Correctly parsing the width from the response
-      const imageHeight = parseInt(match[2]); // Correctly parsing the height
-      const count = parseInt(match[3]);
-
-      // Now parsing the object details properly
-      const objectDetailsString = match[4];
-      const objectDetails = objectDetailsString
-        .split("], [")
-        .map((detail: string) => {
-          const params = detail
-            .replace(/[\[\]top: ]/g, "") // Removing non-numeric characters like `[` `]` and `top:`
-            .split(", "); // Splitting by comma
-          // Parse the parameters into numbers
-          if (params.length === 4) {
-            const [top, left, width, height] = params.map((param: string) =>
-              parseInt(param),
-            );
-            return { top, left, width, height };
-          }
-          return null; // If the object data is not valid
-        })
-        .filter((obj: any) => obj !== null); // Filter out invalid objects
-
-      return { imageWidth, imageHeight, count, objectDetails };
+    // Extract count and coordinates
+    const match = text.match(/(\d+),\s*\[\[(.*?)\]\]/s);
+    if (!match) {
+      console.error("Could not parse count and coordinates");
+      return { error: "Invalid response format" };
     }
 
-    return { error: "No valid response received from the AI model." };
+    const count = parseInt(match[1]);
+
+    // Now extract the bounding boxes part
+    const boxesMatch = text.match(/\[\[(.*?)\]\]/s);
+    if (!boxesMatch) {
+      console.error("Could not parse bounding boxes");
+      return { imageWidth, imageHeight, count, boundingBoxes: [] };
+    }
+
+    const boxesStr = boxesMatch[1];
+    console.log("Boxes string:", boxesStr);
+
+    // Split and parse the boxes
+    const boundingBoxes = boxesStr
+      .split(/\],\s*\[/)
+      .map((box) => {
+        // Extract coordinates using named capture groups for floating point numbers
+        const coords = box.match(
+          /x1:\s*(\d*\.?\d+),\s*y1:\s*(\d*\.?\d+),\s*x2:\s*(\d*\.?\d+),\s*y2:\s*(\d*\.?\d+)/,
+        );
+        if (!coords) {
+          console.error("Invalid box format:", box);
+          return null;
+        }
+        const [_, x1, y1, x2, y2] = coords.map((n) => (n ? parseFloat(n) : 0));
+        return { x1, y1, x2, y2 };
+      })
+      .filter((box) => box !== null);
+
+    console.log("Parsed bounding boxes:", boundingBoxes);
+    return { count, boundingBoxes };
   } catch (error) {
     console.error("Detailed Gemini API Error:", error);
     return { error: error.toString() };
